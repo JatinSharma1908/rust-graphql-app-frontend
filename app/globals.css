@@ -1,0 +1,359 @@
+/* LandingPage.module.css
+   Place this file at: app/(root)/page/LandingPage.module.css
+   (same folder as page.tsx)
+*/
+
+/* ── Root layout ─────────────────────────────────────── */
+.root {
+    display: flex;
+    min-height: 100vh;
+    font-family: 'Outfit', sans-serif;
+    background: #F2F0EB;
+}
+
+/* ══════════════════════════════════════════════════════
+   LEFT PANEL
+══════════════════════════════════════════════════════ */
+.left {
+    flex: 1;
+    background: #1E3932;
+    padding: 48px 52px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Decorative circles */
+.circleTop {
+    position: absolute;
+    top: -120px; right: -80px;
+    width: 400px; height: 400px;
+    border-radius: 50%;
+    background: rgba(0, 112, 74, 0.35);
+    pointer-events: none;
+}
+.circleBottom {
+    position: absolute;
+    bottom: -80px; left: -60px;
+    width: 280px; height: 280px;
+    border-radius: 50%;
+    background: rgba(203, 162, 88, 0.12);
+    pointer-events: none;
+}
+
+/* ── Logo ─────────────────────────────────────────────── */
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: relative;
+    text-decoration: none;
+    z-index: 1;
+}
+.logoBadge {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: #00704A;
+    border: 2px solid #CBA258;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 14px;
+    color: #CBA258;
+    font-weight: 700;
+}
+.logoText {
+    font-size: 13px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.85);
+    font-weight: 500;
+}
+
+/* ── Hero ─────────────────────────────────────────────── */
+.hero {
+    position: relative;
+    z-index: 1;
+}
+
+.pill {
+    display: inline-block;
+    background: rgba(203, 162, 88, 0.2);
+    color: #CBA258;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 5px 12px;
+    border-radius: 20px;
+    border: 1px solid rgba(203, 162, 88, 0.35);
+    margin-bottom: 24px;
+}
+
+.heroHeading {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: clamp(40px, 5vw, 56px);
+    font-weight: 900;
+    line-height: 1.05;
+    color: #ffffff;
+    margin-bottom: 20px;
+}
+
+.heroAccent {
+    color: #CBA258;
+    font-style: normal;
+}
+
+.heroSub {
+    font-size: 15px;
+    color: rgba(255, 255, 255, 0.6);
+    line-height: 1.75;
+    max-width: 380px;
+    margin-bottom: 36px;
+}
+
+/* Feature list */
+.featureList {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-bottom: 40px;
+}
+.featureItem {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.featureDot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #CBA258;
+    flex-shrink: 0;
+    box-shadow: 0 0 8px rgba(203, 162, 88, 0.5);
+}
+.featureText {
+    font-size: 13.5px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* CTA buttons */
+.ctaRow {
+    display: flex;
+    gap: 12px;
+}
+.btnPrimary {
+    display: inline-block;
+    padding: 13px 30px;
+    background: #00704A;
+    color: #fff;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 600;
+    box-shadow: 0 4px 16px rgba(0, 112, 74, 0.4);
+    transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+}
+.btnPrimary:hover {
+    background: #1E3932;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 24px rgba(0, 112, 74, 0.5);
+    color: #fff;
+}
+.btnOutline {
+    display: inline-block;
+    padding: 13px 30px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.85);
+    border: 1.5px solid rgba(255, 255, 255, 0.2);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 500;
+    transition: border-color 0.2s, background 0.2s;
+}
+.btnOutline:hover {
+    border-color: rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.07);
+    color: #fff;
+}
+
+/* ── Stats ────────────────────────────────────────────── */
+.stats {
+    display: flex;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding-top: 28px;
+    position: relative;
+    z-index: 1;
+}
+.stat {
+    flex: 1;
+    padding-right: 24px;
+}
+.statBorder {
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    margin-right: 24px;
+}
+.stat:last-child {
+    padding-right: 0;
+}
+.statVal {
+    font-size: 22px;
+    font-weight: 700;
+    color: #CBA258;
+    margin: 0;
+    font-family: 'Playfair Display', Georgia, serif;
+}
+.statLbl {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 3px;
+}
+
+/* ══════════════════════════════════════════════════════
+   RIGHT PANEL
+══════════════════════════════════════════════════════ */
+.right {
+    width: 460px;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 52px 48px;
+    position: relative;
+}
+
+.accentBar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #00704A, #CBA258);
+}
+
+.getAccess {
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #b0b8c1;
+    margin-bottom: 8px;
+}
+
+.rightHeading {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 28px;
+    font-weight: 700;
+    color: #1a1a1a;
+    margin-bottom: 8px;
+}
+
+.rightSub {
+    font-size: 14px;
+    color: #718096;
+    margin-bottom: 36px;
+    line-height: 1.6;
+}
+
+.rightBtns {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.rightBtnPrimary {
+    display: block;
+    text-align: center;
+    padding: 14px;
+    background: #00704A;
+    color: #fff;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 600;
+    box-shadow: 0 4px 16px rgba(0, 112, 74, 0.3);
+    transition: background 0.2s, transform 0.15s;
+}
+.rightBtnPrimary:hover {
+    background: #1E3932;
+    transform: translateY(-1px);
+    color: #fff;
+}
+.rightBtnOutline {
+    display: block;
+    text-align: center;
+    padding: 14px;
+    background: transparent;
+    color: #1a1a1a;
+    border: 1.5px solid #e2e8f0;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-decoration: none;
+    border-radius: 8px;
+    font-weight: 500;
+    transition: border-color 0.2s, background 0.2s;
+}
+.rightBtnOutline:hover {
+    border-color: #00704A;
+    background: #f0faf6;
+    color: #1E3932;
+}
+
+.terms {
+    font-size: 12px;
+    color: #b0b8c1;
+    margin-top: 24px;
+    line-height: 1.7;
+}
+.terms a {
+    color: #00704A;
+    text-decoration: none;
+}
+.terms a:hover {
+    text-decoration: underline;
+}
+
+.rightFooter {
+    margin-top: 40px;
+    padding-top: 28px;
+    border-top: 1px solid #f0f0f0;
+}
+.rightFooterLabel {
+    font-size: 12px;
+    color: #b0b8c1;
+    margin-bottom: 10px;
+}
+.rightFooterLink {
+    font-size: 13px;
+    color: #00704A;
+    text-decoration: none;
+    font-weight: 600;
+}
+.rightFooterLink:hover {
+    color: #1E3932;
+}
+
+/* ── Responsive ───────────────────────────────────────── */
+@media (max-width: 768px) {
+    .root {
+        flex-direction: column;
+    }
+    .left {
+        padding: 36px 28px;
+    }
+    .right {
+        width: 100%;
+        padding: 40px 28px;
+    }
+    .heroHeading {
+        font-size: 38px;
+    }
+}
