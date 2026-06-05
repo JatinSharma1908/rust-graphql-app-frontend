@@ -1,490 +1,192 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { useQuery, useMutation } from "@apollo/client/react";
-import {
-    ADMIN_GET_USERS,
-    ADMIN_GET_POSTS,
-    ADMIN_GET_JOBS,
-    ADMIN_SUSPEND_USER,
-    ADMIN_DELETE_POST,
-    ADMIN_DELETE_JOB,
-} from "@/lib/admin-graphql";
+import { ADMIN_USERS_QUERY, ADMIN_POSTS_QUERY, JOBS_QUERY, SUSPEND_USER_MUTATION, DELETE_POST_MUTATION, DELETE_JOB_MUTATION } from "@/lib/graphql";
+import { useAuth } from "@/context/AuthContext";
+import { useRouter } from "next/navigation";
+import Navbar from "@/components/Navbar";
+import { IconTrendingUp, IconTrendingDown, IconBan, IconTrash, IconRefresh, IconUsers, IconArticle, IconBriefcase, IconAlertTriangle } from "@tabler/icons-react";
 
-// ── Brand palette ─────────────────────────────────────────────
-const C = {
-    forest: "#1E3932",
-    green: "#00704A",
-    gold: "#CBA258",
-    cream: "#F2F0EB",
-    white: "#ffffff",
-    muted: "#718096",
-    border: "#E2E8F0",
-    danger: "#c53030",
-    dangerBg: "rgba(197,48,48,0.08)",
-    successBg: "rgba(0,112,74,0.09)",
-};
-
-// ── Fallback mock data (used until backend is live) ───────────
-const MOCK_USERS = [
-    { id: "u-001", username: "alex_dev",    email: "alex@example.com",    role: "user",      status: "active",    createdAt: "2026-01-10", followerCount: 320 },
-    { id: "u-002", username: "priya_codes", email: "priya@example.com",   role: "recruiter", status: "active",    createdAt: "2026-02-03", followerCount: 890 },
-    { id: "u-003", username: "bob_ml",      email: "bob@example.com",     role: "admin",     status: "active",    createdAt: "2025-11-22", followerCount: 1200 },
-    { id: "u-004", username: "tanya_ui",    email: "tanya@example.com",   role: "user",      status: "suspended", createdAt: "2026-03-15", followerCount: 67 },
-    { id: "u-005", username: "rohit_rs",    email: "rohit@example.com",   role: "user",      status: "active",    createdAt: "2026-04-01", followerCount: 445 },
+const kpis = [
+  { label: "Total Users",  value: "12,483", trend: "+8%",  up: true,  icon: IconUsers,         color: "#6B4EFF", bg: "#ede9ff" },
+  { label: "Posts",        value: "84,312", trend: "+15%", up: true,  icon: IconArticle,        color: "#ec4899", bg: "#fce7f3" },
+  { label: "Job Listings", value: "5,201",  trend: "+3%",  up: true,  icon: IconBriefcase,      color: "#22c55e", bg: "#dcfce7" },
+  { label: "Suspended",    value: "47",     trend: "−2",   up: false, icon: IconAlertTriangle,  color: "#f59e0b", bg: "#fef3c7" },
 ];
 
-const MOCK_POSTS = [
-    { id: "p-001", userId: "alex_dev",    caption: "Just shipped my Rust API 🚀", visibility: "public",    createdAt: "2026-05-25" },
-    { id: "p-002", userId: "priya_codes", caption: "Hiring senior React devs!",   visibility: "public",    createdAt: "2026-05-24" },
-    { id: "p-003", userId: "tanya_ui",    caption: "Check this design system",    visibility: "followers", createdAt: "2026-05-23" },
-    { id: "p-004", userId: "bob_ml",      caption: "ML pipeline benchmarks",      visibility: "private",   createdAt: "2026-05-21" },
+const mockUsers = [
+  { id: "1", username: "rahul_sharma", email: "rs@gmail.com",   role: "user",      status: "active",    followerCount: 1200 },
+  { id: "2", username: "anika_k",      email: "ak@outlook.com", role: "user",      status: "active",    followerCount: 340 },
+  { id: "3", username: "spam_bot99",   email: "bot@fake.io",    role: "user",      status: "suspended", followerCount: 0 },
+  { id: "4", username: "priya_v",      email: "pv@proton.me",   role: "recruiter", status: "active",    followerCount: 2800 },
 ];
 
-const MOCK_JOBS = [
-    { id: "j-001", title: "Senior Rust Engineer", companyName: "InfraCo",    location: "Remote",    createdAt: "2026-05-20" },
-    { id: "j-002", title: "React Frontend Dev",   companyName: "DesignHub",  location: "Bangalore", createdAt: "2026-05-18" },
-    { id: "j-003", title: "DevOps Engineer",      companyName: "CloudBase",  location: "Remote",    createdAt: "2026-05-15" },
-];
-
-const STATS_MOCK = [
-    { label: "Total Users",   value: "12,847", delta: "+8.4%",  up: true  },
-    { label: "Posts Today",   value: "3,201",  delta: "+12.1%", up: true  },
-    { label: "Active Jobs",   value: "5,234",  delta: "-2.3%",  up: false },
-    { label: "Messages Sent", value: "41,098", delta: "+19.7%", up: true  },
-];
-
-const ACTIVITY_MOCK = [
-    { time: "2 min ago",  event: "New user registered",    detail: "sara_devops joined Brewlink" },
-    { time: "14 min ago", event: "Job listing created",    detail: "ML Engineer @ DataFusion" },
-    { time: "31 min ago", event: "Post flagged",           detail: "tanya_ui's post reported for spam" },
-    { time: "1 hr ago",   event: "User suspended",         detail: "tanya_ui account suspended" },
-    { time: "2 hrs ago",  event: "Conversation started",   detail: "alex_dev ↔ priya_codes" },
-];
-
-// ── Micro-components ──────────────────────────────────────────
-const Badge = ({ children, color = "gray" }: { children: React.ReactNode; color?: string }) => {
-    const map: Record<string, { bg: string; color: string }> = {
-        green:  { bg: C.successBg,                       color: C.green  },
-        red:    { bg: C.dangerBg,                        color: C.danger },
-        gold:   { bg: "rgba(203,162,88,0.15)",           color: "#8a6820" },
-        gray:   { bg: "#f1f5f9",                         color: "#475569" },
-        blue:   { bg: "#EFF6FF",                         color: "#1D4ED8" },
-        purple: { bg: "#F5F3FF",                         color: "#6D28D9" },
-    };
-    const s = map[color] ?? map.gray;
-    return (
-        <span style={{
-            display: "inline-block", padding: "2px 9px", borderRadius: 20,
-            fontSize: 11, fontWeight: 600, letterSpacing: "0.03em",
-            background: s.bg, color: s.color,
-        }}>{children}</span>
-    );
-};
-
-const statusBadge  = (s: string) => s === "active" ? <Badge color="green">active</Badge> : <Badge color="red">suspended</Badge>;
-const visiBadge    = (v: string) => v === "public" ? <Badge color="green">public</Badge> : v === "private" ? <Badge color="gray">private</Badge> : <Badge color="blue">followers</Badge>;
-const roleBadge    = (r: string) => r === "admin" ? <Badge color="red">admin</Badge> : r === "recruiter" ? <Badge color="purple">recruiter</Badge> : <Badge color="gray">user</Badge>;
-
-const TH = ({ children }: { children: React.ReactNode }) => (
-    <th style={{
-        padding: "10px 14px", textAlign: "left",
-        fontSize: 11, fontWeight: 600, letterSpacing: "0.08em",
-        textTransform: "uppercase" as const, color: C.muted,
-        borderBottom: `1.5px solid ${C.border}`, whiteSpace: "nowrap" as const,
-    }}>{children}</th>
-);
-
-const TD = ({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) => (
-    <td style={{
-        padding: "11px 14px", fontSize: 13.5, color: "#1a1a1a",
-        borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" as const, ...style,
-    }}>{children}</td>
-);
-
-const ActionBtn = ({ label, color = C.green, onClick }: { label: string; color?: string; onClick?: () => void }) => (
-    <button onClick={onClick} style={{
-        padding: "4px 10px", fontSize: 11, fontWeight: 600,
-        border: `1.5px solid ${color}`, borderRadius: 6,
-        background: "transparent", color, cursor: "pointer",
-        marginRight: 4, fontFamily: "'Outfit', sans-serif",
-    }}>{label}</button>
-);
-
-const Avatar = ({ name, size = 32 }: { name: string; size?: number }) => (
-    <div style={{
-        width: size, height: size, borderRadius: "50%",
-        background: C.forest, color: C.gold, flexShrink: 0,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: size * 0.38, fontWeight: 700,
-    }}>{name?.[0]?.toUpperCase() ?? "?"}</div>
-);
-
-// ── Section: Overview ─────────────────────────────────────────
-function Overview() {
-    return (
-        <div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 28 }}>
-                {STATS_MOCK.map(s => (
-                    <div key={s.label} style={{
-                        background: C.white, border: `1px solid ${C.border}`,
-                        borderRadius: 12, padding: "20px 22px",
-                        borderTop: `3px solid ${s.up ? C.green : C.danger}`,
-                    }}>
-                        <div style={{ fontSize: 13, color: C.muted, fontWeight: 500, marginBottom: 4 }}>{s.label}</div>
-                        <div style={{ fontSize: 26, fontWeight: 700, color: "#1a1a1a", fontFamily: "'Playfair Display', serif" }}>{s.value}</div>
-                        <div style={{ fontSize: 12, color: s.up ? C.green : C.danger, marginTop: 4, fontWeight: 600 }}>{s.delta} this week</div>
-                    </div>
-                ))}
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 20 }}>
-                <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24 }}>
-                    <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: 17, fontWeight: 700, marginBottom: 18, color: C.forest }}>Live Activity</h3>
-                    {ACTIVITY_MOCK.map((a, i) => (
-                        <div key={i} style={{
-                            display: "flex", gap: 14, paddingBottom: 14, marginBottom: 14,
-                            borderBottom: i < ACTIVITY_MOCK.length - 1 ? `1px solid ${C.border}` : "none",
-                        }}>
-                            <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.green, flexShrink: 0, marginTop: 5 }} />
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1a1a1a" }}>{a.event}</div>
-                                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{a.detail}</div>
-                            </div>
-                            <div style={{ fontSize: 11, color: "#b0b8c1", whiteSpace: "nowrap" as const, paddingTop: 2 }}>{a.time}</div>
-                        </div>
-                    ))}
-                </div>
-
-                <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
-                    <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: 15, fontWeight: 700, marginBottom: 14, color: C.forest }}>Content Health</h3>
-                    {[
-                        { label: "Active users",      val: "12,732", warn: false },
-                        { label: "Suspended users",   val: "115",    warn: true  },
-                        { label: "Public posts",      val: "78%",    warn: false },
-                        { label: "Active jobs",       val: "5,234",  warn: false },
-                        { label: "Pending reports",   val: "2",      warn: true  },
-                    ].map(r => (
-                        <div key={r.label} style={{
-                            display: "flex", justifyContent: "space-between", alignItems: "center",
-                            padding: "8px 0", borderBottom: `1px solid ${C.border}`,
-                        }}>
-                            <span style={{ fontSize: 13, color: C.muted }}>{r.label}</span>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: r.warn ? C.danger : C.green }}>{r.val}</span>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </div>
-    );
-}
-
-// ── Section: Users ────────────────────────────────────────────
-function UsersSection() {
-    const [search, setSearch] = useState("");
-
-    // Swap to real data once backend admin queries are added:
-    // const { data, loading } = useQuery(ADMIN_GET_USERS);
-    // const users = data?.adminUsers ?? MOCK_USERS;
-    const [users, setUsers] = useState(MOCK_USERS);
-
-    // const [suspendUser] = useMutation(ADMIN_SUSPEND_USER);
-    const toggle = (id: string) => {
-        setUsers(prev => prev.map(u =>
-            u.id === id ? { ...u, status: u.status === "active" ? "suspended" : "active" } : u
-        ));
-        // suspendUser({ variables: { userId: id } });
-    };
-
-    const filtered = users.filter(u =>
-        u.username.toLowerCase().includes(search.toLowerCase()) ||
-        u.email.toLowerCase().includes(search.toLowerCase())
-    );
-
-    return (
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-            <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: C.forest }}>
-                    User Management
-                    <span style={{ fontSize: 13, fontWeight: 400, color: C.muted, marginLeft: 10 }}>{users.length} total</span>
-                </h3>
-                <input
-                    value={search} onChange={e => setSearch(e.target.value)}
-                    placeholder="Search by username or email…"
-                    style={{
-                        padding: "8px 14px", border: `1.5px solid ${C.border}`, borderRadius: 8,
-                        fontSize: 13, outline: "none", fontFamily: "'Outfit', sans-serif", width: 260,
-                    }}
-                />
-            </div>
-            <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" as const }}>
-                    <thead>
-                        <tr style={{ background: "#FAFAF9" }}>
-                            <TH>User</TH><TH>Role</TH><TH>Status</TH><TH>Followers</TH><TH>Joined</TH><TH>Actions</TH>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {filtered.map(u => (
-                            <tr key={u.id}
-                                onMouseEnter={e => (e.currentTarget.style.background = "#FAFAF9")}
-                                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                            >
-                                <TD>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                        <Avatar name={u.username} />
-                                        <div>
-                                            <div style={{ fontWeight: 600, fontSize: 13.5 }}>{u.username}</div>
-                                            <div style={{ fontSize: 11.5, color: C.muted }}>{u.email}</div>
-                                        </div>
-                                    </div>
-                                </TD>
-                                <TD>{roleBadge(u.role)}</TD>
-                                <TD>{statusBadge(u.status)}</TD>
-                                <TD style={{ color: C.muted }}>{u.followerCount}</TD>
-                                <TD style={{ color: C.muted }}>{u.createdAt}</TD>
-                                <TD>
-                                    <ActionBtn label="View" />
-                                    <ActionBtn
-                                        label={u.status === "active" ? "Suspend" : "Reinstate"}
-                                        color={u.status === "active" ? C.danger : C.green}
-                                        onClick={() => toggle(u.id)}
-                                    />
-                                </TD>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    );
-}
-
-// ── Section: Posts ────────────────────────────────────────────
-function PostsSection() {
-    // const { data } = useQuery(ADMIN_GET_POSTS);
-    // const [deletePost] = useMutation(ADMIN_DELETE_POST);
-    const [posts, setPosts] = useState(MOCK_POSTS);
-
-    const remove = (id: string) => {
-        setPosts(prev => prev.filter(p => p.id !== id));
-        // deletePost({ variables: { postId: id } });
-    };
-
-    return (
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-            <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}` }}>
-                <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: C.forest }}>Post Moderation</h3>
-            </div>
-            <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" as const }}>
-                    <thead>
-                        <tr style={{ background: "#FAFAF9" }}>
-                            <TH>Author</TH><TH>Caption</TH><TH>Visibility</TH><TH>Created</TH><TH>Actions</TH>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {posts.map(p => (
-                            <tr key={p.id}
-                                onMouseEnter={e => (e.currentTarget.style.background = "#FAFAF9")}
-                                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                            >
-                                <TD>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                        <Avatar name={p.userId} size={28} />
-                                        <span style={{ fontWeight: 600 }}>{p.userId}</span>
-                                    </div>
-                                </TD>
-                                <TD style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>
-                                    {p.caption ?? <span style={{ color: C.muted, fontStyle: "italic" }}>no caption</span>}
-                                </TD>
-                                <TD>{visiBadge(p.visibility)}</TD>
-                                <TD style={{ color: C.muted }}>{p.createdAt}</TD>
-                                <TD>
-                                    <ActionBtn label="Delete" color={C.danger} onClick={() => remove(p.id)} />
-                                </TD>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    );
-}
-
-// ── Section: Jobs ─────────────────────────────────────────────
-function JobsSection() {
-    // const { data } = useQuery(ADMIN_GET_JOBS);
-    // const [deleteJob] = useMutation(ADMIN_DELETE_JOB);
-    const [jobs, setJobs] = useState(MOCK_JOBS);
-
-    const remove = (id: string) => {
-        setJobs(prev => prev.filter(j => j.id !== id));
-        // deleteJob({ variables: { jobId: id } });
-    };
-
-    return (
-        <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-            <div style={{ padding: "20px 24px", borderBottom: `1px solid ${C.border}` }}>
-                <h3 style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: C.forest }}>Job Listings</h3>
-            </div>
-            <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" as const }}>
-                    <thead>
-                        <tr style={{ background: "#FAFAF9" }}>
-                            <TH>Title</TH><TH>Company</TH><TH>Location</TH><TH>Posted</TH><TH>Actions</TH>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {jobs.map(j => (
-                            <tr key={j.id}
-                                onMouseEnter={e => (e.currentTarget.style.background = "#FAFAF9")}
-                                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                            >
-                                <TD style={{ fontWeight: 600 }}>{j.title}</TD>
-                                <TD style={{ color: C.muted }}>{j.companyName}</TD>
-                                <TD style={{ color: C.muted }}>{j.location}</TD>
-                                <TD style={{ color: C.muted }}>{j.createdAt}</TD>
-                                <TD>
-                                    <ActionBtn label="Delete" color={C.danger} onClick={() => remove(j.id)} />
-                                </TD>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    );
-}
-
-// ── Nav config ────────────────────────────────────────────────
-const NAV = [
-    { id: "overview", label: "Overview" },
-    { id: "users",    label: "Users"    },
-    { id: "posts",    label: "Posts"    },
-    { id: "jobs",     label: "Jobs"     },
-] as const;
-
-type NavId = typeof NAV[number]["id"];
-
-// ── Root export ───────────────────────────────────────────────
 export default function AdminPage() {
-    const router = useRouter();
-    const [active, setActive] = useState<NavId>("overview");
-    const [adminUser, setAdminUser] = useState<{ username: string } | null>(null);
-    const [checking, setChecking] = useState(true);
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState("Users");
 
-    useEffect(() => {
-        try {
-            const raw = localStorage.getItem("user");
-            if (!raw) { router.replace("/login"); return; }
-            const user = JSON.parse(raw);
-            if (user?.role !== "admin") { router.replace("/home"); return; }
-            setAdminUser(user);
-        } catch {
-            router.replace("/login");
-        } finally {
-            setChecking(false);
-        }
-    }, [router]);
+  const { data: usersData, refetch: refetchUsers } = useQuery(ADMIN_USERS_QUERY, { skip: !user, onError: () => {} });
+  const { data: postsData }  = useQuery(ADMIN_POSTS_QUERY, { skip: !user, onError: () => {} });
+  const { data: jobsData }   = useQuery(JOBS_QUERY,        { skip: !user, onError: () => {} });
 
-    if (checking) {
-        return (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: C.cream, fontFamily: "'Outfit', sans-serif" }}>
-                <div style={{ fontSize: 14, color: C.muted }}>Checking permissions…</div>
+  const [suspendUser] = useMutation(SUSPEND_USER_MUTATION,  { onCompleted: () => refetchUsers(), onError: () => {} });
+  const [deletePost]  = useMutation(DELETE_POST_MUTATION,   { onError: () => {} });
+  const [deleteJob]   = useMutation(DELETE_JOB_MUTATION,    { onError: () => {} });
+
+  if (!isLoading && !user) { router.push("/login"); return null; }
+
+  const users = usersData?.adminUsers ?? mockUsers;
+  const posts = postsData?.adminPosts ?? [];
+  const jobs  = jobsData?.jobs        ?? [];
+
+  return (
+    <>
+      <Navbar />
+      <div style={{ marginTop: "var(--nav-h)", background: "var(--bg)", minHeight: "100vh", padding: "24px 0" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 16px" }}>
+
+          <div style={s.pageHeader}>
+            <div>
+              <h1 style={s.pageTitle}>Admin Dashboard</h1>
+              <p style={{ fontSize: 13, color: "var(--t3)" }}>Brewlink platform management</p>
             </div>
-        );
-    }
+            <div style={s.adminBadge}>ADMIN</div>
+          </div>
 
-    const subtitles: Record<NavId, string> = {
-        overview: "Platform health and live activity",
-        users:    "Manage members, roles, and suspensions",
-        posts:    "Review and moderate all content",
-        jobs:     "Monitor job listings across the platform",
-    };
-
-    return (
-        <div style={{ display: "flex", minHeight: "100vh", fontFamily: "'Outfit', sans-serif", background: C.cream }}>
-
-            {/* ── Sidebar ─────────────────────────────────── */}
-            <div style={{
-                width: 220, background: C.forest,
-                display: "flex", flexDirection: "column",
-                position: "sticky", top: 0, height: "100vh", flexShrink: 0,
-            }}>
-                {/* Logo */}
-                <div style={{ padding: "28px 24px 24px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div style={{
-                            width: 34, height: 34, borderRadius: "50%",
-                            background: C.green, border: `2px solid ${C.gold}`,
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            fontFamily: "'Playfair Display', serif",
-                            fontSize: 14, color: C.gold, fontWeight: 700,
-                        }}>B</div>
-                        <div>
-                            <div style={{ fontSize: 13, letterSpacing: "0.18em", textTransform: "uppercase" as const, color: "rgba(255,255,255,0.85)", fontWeight: 500 }}>Brewlink</div>
-                            <div style={{ fontSize: 10, color: C.gold, letterSpacing: "0.12em", textTransform: "uppercase" as const, marginTop: 1 }}>Admin Panel</div>
-                        </div>
+          {/* KPIs */}
+          <div style={s.kpiGrid}>
+            {kpis.map((k) => {
+              const KIcon = k.icon;
+              return (
+                <div key={k.label} className="card fade" style={s.kpi}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                    <div style={{ width: 40, height: 40, borderRadius: 10, background: k.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <KIcon size={18} color={k.color} />
                     </div>
+                    <div style={{ ...s.trendBadge, background: k.up ? "#dcfce7" : "#fee2e2", color: k.up ? "#16a34a" : "#dc2626" }}>
+                      {k.up ? <IconTrendingUp size={11} /> : <IconTrendingDown size={11} />} {k.trend}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: "var(--t1)", letterSpacing: "-0.02em" }}>{k.value}</div>
+                  <div style={{ fontSize: 12, color: "var(--t3)", fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginTop: 2 }}>{k.label}</div>
                 </div>
+              );
+            })}
+          </div>
 
-                {/* Nav */}
-                <nav style={{ flex: 1, padding: "16px 12px" }}>
-                    {NAV.map(n => {
-                        const isActive = active === n.id;
-                        return (
-                            <button key={n.id} onClick={() => setActive(n.id)} style={{
-                                display: "flex", alignItems: "center", gap: 10,
-                                width: "100%", padding: "10px 14px", borderRadius: 8,
-                                border: "none", cursor: "pointer", marginBottom: 4,
-                                background: isActive ? "rgba(203,162,88,0.18)" : "transparent",
-                                color: isActive ? C.gold : "rgba(255,255,255,0.6)",
-                                fontSize: 13.5, fontFamily: "'Outfit', sans-serif",
-                                fontWeight: isActive ? 600 : 400, textAlign: "left" as const,
-                                borderLeft: isActive ? `3px solid ${C.gold}` : "3px solid transparent",
-                            }}>
-                                {n.label}
+          {/* Table */}
+          <div className="card fade fade-1" style={{ overflow: "hidden" }}>
+            <div style={s.tableHeader}>
+              <div style={s.tabs}>
+                {["Users", "Posts", "Jobs"].map((t) => (
+                  <button key={t} onClick={() => setActiveTab(t)} style={{ ...s.tab, ...(activeTab === t ? s.tabActive : {}) }}>{t}</button>
+                ))}
+              </div>
+              <span style={{ fontSize: 12, color: "var(--t3)" }}>
+                {activeTab === "Users" ? users.length : activeTab === "Posts" ? posts.length : jobs.length} records
+              </span>
+            </div>
+
+            <div style={{ overflowX: "auto" }}>
+              {activeTab === "Users" && (
+                <table style={s.table}>
+                  <thead><tr>{["User", "Email", "Role", "Followers", "Status", "Actions"].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {users.map((u: any) => (
+                      <tr key={u.id}>
+                        <td style={s.td}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ width: 30, height: 30, borderRadius: 8, background: u.status === "suspended" ? "#fee2e2" : "var(--purple-light)", color: u.status === "suspended" ? "#dc2626" : "var(--purple)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{u.username[0].toUpperCase()}</div>
+                            <span style={{ fontWeight: 600 }}>{u.username}</span>
+                          </div>
+                        </td>
+                        <td style={{ ...s.td, color: "var(--t3)" }}>{u.email}</td>
+                        <td style={s.td}><span style={s.roleBadge}>{u.role}</span></td>
+                        <td style={{ ...s.td, color: "var(--t3)" }}>{u.followerCount?.toLocaleString() ?? 0}</td>
+                        <td style={s.td}><span style={{ ...s.statusBadge, ...(u.status === "active" ? s.badgeGreen : s.badgeRed) }}>{u.status}</span></td>
+                        <td style={s.td}>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button style={s.actionBtn} title={u.status === "active" ? "Suspend" : "Restore"}
+                              onClick={() => suspendUser({ variables: { userId: u.id, status: u.status === "active" ? "suspended" : "active" } })}>
+                              {u.status === "active" ? <IconBan size={14} color="#f59e0b" /> : <IconRefresh size={14} color="#22c55e" />}
                             </button>
-                        );
-                    })}
-                </nav>
+                            <button style={s.actionBtn}><IconTrash size={14} color="#ef4444" /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
 
-                {/* Admin badge + logout */}
-                <div style={{ padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{
-                        width: 30, height: 30, borderRadius: "50%",
-                        background: C.gold, color: C.forest,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 12, fontWeight: 700,
-                    }}>{adminUser?.username?.[0]?.toUpperCase() ?? "A"}</div>
-                    <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.85)", fontWeight: 600 }}>{adminUser?.username ?? "Admin"}</div>
-                        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>Super Admin</div>
-                    </div>
-                    <button onClick={() => { localStorage.clear(); router.push("/login"); }} style={{
-                        background: "none", border: "none", cursor: "pointer",
-                        fontSize: 11, color: "rgba(255,255,255,0.3)",
-                        fontFamily: "'Outfit', sans-serif",
-                    }}>logout</button>
-                </div>
+              {activeTab === "Posts" && (
+                <table style={s.table}>
+                  <thead><tr>{["Post ID", "User ID", "Caption", "Visibility", "Likes", "Actions"].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {posts.length === 0
+                      ? <tr><td colSpan={6} style={{ ...s.td, textAlign: "center" as const, padding: 32, color: "var(--t3)" }}>No posts loaded</td></tr>
+                      : posts.map((p: any) => (
+                        <tr key={p.id}>
+                          <td style={{ ...s.td, fontFamily: "monospace", fontSize: 11, color: "var(--t3)" }}>{p.id?.slice(0, 8)}…</td>
+                          <td style={{ ...s.td, fontFamily: "monospace", fontSize: 11, color: "var(--t3)" }}>{p.userId?.slice(0, 8)}…</td>
+                          <td style={s.td}>{p.caption?.slice(0, 45) ?? "—"}</td>
+                          <td style={s.td}><span style={{ ...s.statusBadge, ...(p.visibility === "public" ? s.badgeGreen : s.badgeRed) }}>{p.visibility}</span></td>
+                          <td style={{ ...s.td, color: "var(--t3)" }}>{p.likeCount ?? 0}</td>
+                          <td style={s.td}><button style={s.actionBtn} onClick={() => deletePost({ variables: { postId: p.id } })}><IconTrash size={14} color="#ef4444" /></button></td>
+                        </tr>
+                      ))
+                    }
+                  </tbody>
+                </table>
+              )}
+
+              {activeTab === "Jobs" && (
+                <table style={s.table}>
+                  <thead><tr>{["Title", "Company", "Location", "Type", "Posted", "Actions"].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {jobs.length === 0
+                      ? <tr><td colSpan={6} style={{ ...s.td, textAlign: "center" as const, padding: 32, color: "var(--t3)" }}>No jobs loaded</td></tr>
+                      : jobs.map((j: any) => (
+                        <tr key={j.id}>
+                          <td style={{ ...s.td, fontWeight: 600 }}>{j.title}</td>
+                          <td style={{ ...s.td, color: "var(--t3)" }}>{j.companyName}</td>
+                          <td style={{ ...s.td, color: "var(--t3)" }}>{j.location}</td>
+                          <td style={s.td}><span style={s.roleBadge}>{j.jobType}</span></td>
+                          <td style={{ ...s.td, color: "var(--t3)", fontSize: 11 }}>{j.createdAt ? new Date(j.createdAt).toLocaleDateString() : "—"}</td>
+                          <td style={s.td}><button style={s.actionBtn} onClick={() => deleteJob({ variables: { jobId: j.id } })}><IconTrash size={14} color="#ef4444" /></button></td>
+                        </tr>
+                      ))
+                    }
+                  </tbody>
+                </table>
+              )}
             </div>
-
-            {/* ── Main ────────────────────────────────────── */}
-            <div style={{ flex: 1, padding: "32px", overflowY: "auto" }}>
-                <div style={{ marginBottom: 28 }}>
-                    <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, fontWeight: 900, color: C.forest, marginBottom: 4 }}>
-                        {NAV.find(n => n.id === active)?.label}
-                    </h2>
-                    <p style={{ fontSize: 13.5, color: C.muted }}>{subtitles[active]}</p>
-                </div>
-
-                {active === "overview" && <Overview />}
-                {active === "users"    && <UsersSection />}
-                {active === "posts"    && <PostsSection />}
-                {active === "jobs"     && <JobsSection />}
-            </div>
+          </div>
         </div>
-    );
+      </div>
+    </>
+  );
 }
+
+const s: Record<string, React.CSSProperties> = {
+  pageHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 },
+  pageTitle: { fontSize: 22, fontWeight: 800, color: "var(--t1)", letterSpacing: "-0.02em", marginBottom: 2 },
+  adminBadge: { padding: "5px 14px", borderRadius: 6, background: "var(--purple-light)", color: "var(--purple)", fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", border: "1px solid rgba(107,78,255,0.2)" },
+  kpiGrid: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 16 },
+  kpi: { padding: 16 },
+  trendBadge: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 20 },
+  tableHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)" },
+  tabs: { display: "flex", gap: 4 },
+  tab: { fontSize: 13, fontWeight: 600, padding: "6px 14px", borderRadius: 6, border: "none", background: "transparent", color: "var(--t3)", cursor: "pointer" },
+  tabActive: { background: "var(--purple-light)", color: "var(--purple)" },
+  table: { width: "100%", borderCollapse: "collapse" as const },
+  th: { fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase" as const, color: "var(--t3)", textAlign: "left" as const, padding: "10px 16px", background: "var(--bg)", borderBottom: "1px solid var(--border)" },
+  td: { fontSize: 13, color: "var(--t1)", padding: "11px 16px", borderBottom: "1px solid var(--border)" },
+  roleBadge: { fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 5, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--t2)" },
+  statusBadge: { display: "inline-block", padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 700 },
+  badgeGreen: { background: "rgba(34,197,94,0.1)", color: "#16a34a", border: "1px solid rgba(34,197,94,0.2)" },
+  badgeRed: { background: "rgba(239,68,68,0.1)", color: "#dc2626", border: "1px solid rgba(239,68,68,0.2)" },
+  actionBtn: { width: 30, height: 30, borderRadius: 7, background: "var(--bg)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center" },
+};

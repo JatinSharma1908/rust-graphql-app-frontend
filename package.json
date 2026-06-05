@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@apollo/client": "^4.2.0",
+    "@tabler/icons-react": "^3.44.0",
     "graphql": "^16.14.0",
+    "graphql-ws": "^6.0.8",
     "next": "16.2.6",
     "nodemailer": "^8.0.8",
     "react": "19.2.4",
