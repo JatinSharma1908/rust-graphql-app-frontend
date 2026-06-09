@@ -224,10 +224,12 @@ export const SEND_MESSAGE_MUTATION = gql`
   mutation SendMessage($input: SendMessageInput!) {
     sendMessage(input: $input) {
       id
-      content
-      createdAt
       senderId
+      content
+      isDeleted
+      createdAt
       messageType
+      mediaUrl
     }
   }
 `;
@@ -238,23 +240,15 @@ export const MARK_READ_MUTATION = gql`
   }
 `;
 
-/*
- * MESSAGE_RECEIVED_SUBSCRIPTION
- *
- * This subscription is only activated from the /messages page when the
- * user opens a specific conversation. ApolloWrapper's lazy: true ensures
- * the WebSocket doesn't open until this subscription is first used.
- *
- * The backend broadcasts a new message to all subscribers of a given
- * conversation_id whenever sendMessage is called.
- */
 export const MESSAGE_RECEIVED_SUBSCRIPTION = gql`
   subscription MessageReceived($conversationId: ID!) {
     messageReceived(conversationId: $conversationId) {
       id
       senderId
       content
+      isDeleted
       messageType
+      mediaUrl
       createdAt
     }
   }
