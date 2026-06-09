@@ -1,6 +1,18 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+/**
+ * /app/messages/page.tsx
+ *
+ * Full messaging page with:
+ *  - Conversations list (CONVERSATIONS_QUERY)
+ *  - Chat view with message history (MESSAGES_QUERY)
+ *  - Real-time new messages via WebSocket (MESSAGE_RECEIVED_SUBSCRIPTION)
+ *  - Send message (SEND_MESSAGE_MUTATION)
+ *  - Mark as read (MARK_READ_MUTATION)
+ *  - New conversation modal (CREATE_CONVERSATION_MUTATION + SEARCH_USERS_QUERY)
+ */
+
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useSubscription } from "@apollo/client/react";
 import {
   CONVERSATIONS_QUERY,
@@ -9,188 +21,339 @@ import {
   MARK_READ_MUTATION,
   CREATE_CONVERSATION_MUTATION,
   MESSAGE_RECEIVED_SUBSCRIPTION,
+  SEARCH_USERS_QUERY,
 } from "@/lib/graphql";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import {
   IconSend,
-  IconLoader2,
-  IconMessageCircle,
   IconSearch,
   IconPlus,
+  IconLoader2,
+  IconMessage,
+  IconX,
   IconCheck,
   IconChecks,
+  IconDots,
 } from "@tabler/icons-react";
 
-/* ── helpers ── */
-const fmt = (iso: string) => {
-  const d = new Date(iso);
-  const now = new Date();
-  const isToday =
-    d.getDate() === now.getDate() &&
-    d.getMonth() === now.getMonth() &&
-    d.getFullYear() === now.getFullYear();
-  return isToday
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleDateString([], { month: "short", day: "numeric" });
-};
+/* ─── Types ──────────────────────────────────────────────────────────────── */
+
+interface Participant {
+  username: string;
+  profilePic?: string;
+}
+
+interface Conversation {
+  id: string;
+  conversationType: string;
+  unreadCount: number;
+  lastMessagePreview?: string;
+  participants: Participant[];
+}
+
+interface Message {
+  id: string;
+  senderId: string;
+  content: string;
+  isDeleted?: boolean;
+  createdAt: string;
+  messageType: string;
+  mediaUrl?: string;
+}
+
+/* ─── Helpers ────────────────────────────────────────────────────────────── */
 
 const AVA_COLORS = [
-  "#6B4EFF", "#ec4899", "#22c55e",
-  "#f59e0b", "#8b5cf6", "#06b6d4", "#ef4444",
+  "#6B4EFF", "#ec4899", "#22c55e", "#f59e0b",
+  "#8b5cf6", "#06b6d4", "#ef4444", "#f97316",
 ];
-const avaColor = (str: string) =>
-  AVA_COLORS[
-    str.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % AVA_COLORS.length
-  ];
 
-/* ─────────────────────────────────────────────
-   MessagesPage
-───────────────────────────────────────────── */
-export default function MessagesPage() {
-  const { user, isLoading } = useAuth();
-  const router = useRouter();
+function colorFor(str: string) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h);
+  return AVA_COLORS[Math.abs(h) % AVA_COLORS.length];
+}
 
-  const [activeConvId, setActiveConvId]   = useState<string | null>(null);
-  const [messageText, setMessageText]     = useState("");
-  const [convSearch, setConvSearch]       = useState("");
-  const [localMessages, setLocalMessages] = useState<any[]>([]);
+function initials(username: string) {
+  return username?.slice(0, 2).toUpperCase() ?? "??";
+}
 
-  const bottomRef  = useRef<HTMLDivElement>(null);
-  const inputRef   = useRef<HTMLInputElement>(null);
+function fmtTime(iso: string) {
+  const d = new Date(iso);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (diffDays === 0) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7)  return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
 
-  /* ── Conversations list ── */
-  const {
-    data: convData,
-    loading: convLoading,
-    refetch: refetchConvs,
-  } = useQuery(CONVERSATIONS_QUERY, {
-    skip: !user,
+function getConvName(conv: Conversation, myUsername?: string) {
+  const others = conv.participants.filter((p) => p.username !== myUsername);
+  return others.length > 0 ? others.map((p) => p.username).join(", ") : conv.participants[0]?.username ?? "Unknown";
+}
+
+/* ─── Avatar component ───────────────────────────────────────────────────── */
+function Avatar({ username, size = 40 }: { username: string; size?: number }) {
+  const color = colorFor(username);
+  return (
+    <div
+      className="ava"
+      style={{
+        width: size, height: size,
+        background: color + "20", color,
+        fontSize: size * 0.35, fontWeight: 800, flexShrink: 0,
+      }}
+    >
+      {initials(username)}
+    </div>
+  );
+}
+
+/* ─── New Conversation Modal ─────────────────────────────────────────────── */
+function NewConvModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (convId: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<{ id: string; username: string } | null>(null);
+
+  const { data, loading } = useQuery(SEARCH_USERS_QUERY, {
+    variables: { query: search || "a", limit: 20 },
+    skip: search.length === 0 && true, // always run with fallback
     fetchPolicy: "network-only",
     onError: () => {},
   });
 
-  /* ── Messages for active conversation ── */
-  const { data: msgData, loading: msgLoading } = useQuery(MESSAGES_QUERY, {
-    variables: { input: { conversationId: activeConvId, limit: 50 } },
-    skip: !activeConvId,
+  const [createConv, { loading: creating }] = useMutation(CREATE_CONVERSATION_MUTATION, {
+    onCompleted: (d) => onCreated(d.createConversation.id),
+    onError: () => {},
+  });
+
+  const users: any[] = data?.searchUsers ?? [];
+
+  return (
+    <div style={ms.modalOverlay} onClick={onClose}>
+      <div style={ms.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={ms.modalHead}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: "var(--t1)" }}>New Message</span>
+          <button onClick={onClose} style={ms.iconBtn}><IconX size={16} color="var(--t2)" /></button>
+        </div>
+
+        {/* Search */}
+        <div style={ms.searchRow}>
+          <IconSearch size={14} color="var(--t3)" />
+          <input
+            autoFocus
+            placeholder="Search people…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={ms.searchInput}
+          />
+        </div>
+
+        {/* Selected user pill */}
+        {selected && (
+          <div style={ms.selectedPill}>
+            <Avatar username={selected.username} size={22} />
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{selected.username}</span>
+            <button onClick={() => setSelected(null)} style={{ background: "transparent", display: "flex", padding: 2 }}>
+              <IconX size={12} color="var(--t3)" />
+            </button>
+          </div>
+        )}
+
+        {/* User list */}
+        <div style={ms.userList}>
+          {loading && (
+            <div style={{ textAlign: "center", padding: 24 }}>
+              <IconLoader2 size={18} color="var(--t3)" style={{ animation: "spin 1s linear infinite" }} />
+            </div>
+          )}
+          {!loading && users.slice(0, 8).map((u: any) => (
+            <div
+              key={u.id}
+              onClick={() => setSelected(u)}
+              style={{
+                ...ms.userRow,
+                background: selected?.id === u.id ? "var(--purple-light)" : "transparent",
+              }}
+            >
+              <Avatar username={u.username} size={34} />
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)" }}>{u.username}</div>
+                <div style={{ fontSize: 11, color: "var(--t3)" }}>{u.followerCount?.toLocaleString()} followers</div>
+              </div>
+              {selected?.id === u.id && <IconCheck size={14} color="var(--purple)" style={{ marginLeft: "auto" }} />}
+            </div>
+          ))}
+        </div>
+
+        <button
+          className="btn-primary"
+          disabled={!selected || creating}
+          onClick={() => {
+            if (!selected) return;
+            createConv({
+              variables: {
+                input: { participantIds: [selected.id], conversationType: "dm" },
+              },
+            });
+          }}
+          style={{ width: "100%", justifyContent: "center", borderRadius: 8, padding: "10px" }}
+        >
+          {creating
+            ? <IconLoader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
+            : "Start conversation"}
+        </button>
+      </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+/* ─── Message bubble ─────────────────────────────────────────────────────── */
+function Bubble({ msg, isMine }: { msg: Message; isMine: boolean }) {
+  if (msg.isDeleted) {
+    return (
+      <div style={{ display: "flex", justifyContent: isMine ? "flex-end" : "flex-start", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: "var(--t3)", fontStyle: "italic", padding: "6px 12px" }}>
+          Message deleted
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", justifyContent: isMine ? "flex-end" : "flex-start", marginBottom: 4 }}>
+      <div
+        style={{
+          maxWidth: "68%",
+          padding: "9px 14px",
+          borderRadius: isMine ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+          background: isMine ? "var(--purple)" : "var(--surface)",
+          color: isMine ? "#fff" : "var(--t1)",
+          fontSize: 14,
+          lineHeight: 1.5,
+          border: isMine ? "none" : "1px solid var(--border)",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
+          wordBreak: "break-word",
+        }}
+      >
+        {msg.content}
+        <div
+          style={{
+            fontSize: 10,
+            marginTop: 4,
+            textAlign: "right",
+            color: isMine ? "rgba(255,255,255,0.65)" : "var(--t3)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 3,
+          }}
+        >
+          {fmtTime(msg.createdAt)}
+          {isMine && <IconChecks size={11} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Chat panel ─────────────────────────────────────────────────────────── */
+function ChatPanel({
+  conv,
+  myUserId,
+  myUsername,
+}: {
+  conv: Conversation;
+  myUserId: string;
+  myUsername: string;
+}) {
+  const [text, setText] = useState("");
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef  = useRef<HTMLInputElement>(null);
+
+  /* Fetch history */
+  const { data, loading } = useQuery(MESSAGES_QUERY, {
+    variables: { input: { conversationId: conv.id, limit: 50 } },
     fetchPolicy: "network-only",
     onError: () => {},
   });
 
-  /* ── Mark as read when conversation opened ── */
-  const [markRead] = useMutation(MARK_READ_MUTATION, { onError: () => {} });
-
-  /* ── Send message ── */
-  const [sendMessage, { loading: sending }] = useMutation(SEND_MESSAGE_MUTATION, {
-    onError: () => {},
-  });
-
-  /* ── Real-time subscription — only active when a conversation is open ──
-   *
-   * Because ApolloWrapper now uses lazy: true, the WebSocket connection
-   * is only opened HERE when this hook actually runs with a real
-   * conversationId. On all other pages the WS stays closed.
-   */
+  /* Live subscription — only active when this conversation is open */
   const { data: subData } = useSubscription(MESSAGE_RECEIVED_SUBSCRIPTION, {
-    variables: { conversationId: activeConvId },
-    skip: !activeConvId, // ← never subscribe if no conversation is selected
+    variables: { conversationId: conv.id },
     onError: () => {},
   });
 
-  /* ── Sync server messages into local state ── */
+  /* Mark read */
+  const [markRead] = useMutation(MARK_READ_MUTATION, { onError: () => {} });
   useEffect(() => {
-    if (msgData?.messages) {
-      setLocalMessages([...msgData.messages].reverse()); // backend returns newest-first
-    }
-  }, [msgData]);
+    if (conv.id) markRead({ variables: { conversationId: conv.id } });
+  }, [conv.id]);
 
-  /* ── Append real-time message from subscription ── */
+  /* Merge history + live messages (deduplicate by id) */
+  const [liveMessages, setLiveMessages] = useState<Message[]>([]);
+
   useEffect(() => {
-    if (!subData?.messageReceived) return;
-    const incoming = subData.messageReceived;
-    setLocalMessages((prev) => {
-      // deduplicate by id
-      if (prev.some((m) => m.id === incoming.id)) return prev;
-      return [...prev, incoming];
-    });
-    refetchConvs(); // refresh sidebar preview + unread count
+    // Reset live messages when conversation changes
+    setLiveMessages([]);
+  }, [conv.id]);
+
+  useEffect(() => {
+    if (subData?.messageReceived) {
+      const incoming: Message = subData.messageReceived;
+      setLiveMessages((prev) => {
+        if (prev.some((m) => m.id === incoming.id)) return prev;
+        return [...prev, incoming];
+      });
+    }
   }, [subData]);
 
-  /* ── Scroll to bottom whenever messages change ── */
+  const historyMsgs: Message[] = data?.messages ?? [];
+
+  // Merge: history first, then live messages not already in history
+  const historyIds = new Set(historyMsgs.map((m) => m.id));
+  const allMessages = [
+    ...historyMsgs,
+    ...liveMessages.filter((m) => !historyIds.has(m.id)),
+  ];
+
+  /* Auto-scroll */
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [localMessages]);
+  }, [allMessages.length]);
 
-  /* ── Mark read on open ── */
-  useEffect(() => {
-    if (activeConvId) {
-      markRead({ variables: { conversationId: activeConvId } });
-      inputRef.current?.focus();
-    }
-  }, [activeConvId]);
-
-  /* ── Reset local messages when switching conversations ── */
-  useEffect(() => {
-    setLocalMessages([]);
-  }, [activeConvId]);
-
-  if (!isLoading && !user) { router.push("/login"); return null; }
-
-  const conversations: any[] = convData?.conversations ?? [];
-  const filtered = conversations.filter((c) => {
-    const other = c.participants?.find((p: any) => p.username !== user?.username);
-    return other?.username?.toLowerCase().includes(convSearch.toLowerCase());
+  /* Send */
+  const [sendMessage, { loading: sending }] = useMutation(SEND_MESSAGE_MUTATION, {
+    onCompleted: (d) => {
+      // Optimistically add our own sent message to live list
+      const sent: Message = d.sendMessage;
+      setLiveMessages((prev) => {
+        if (prev.some((m) => m.id === sent.id)) return prev;
+        return [...prev, sent];
+      });
+    },
+    onError: () => {},
   });
 
-  const activeConv = conversations.find((c) => c.id === activeConvId);
-  const otherParticipant = activeConv?.participants?.find(
-    (p: any) => p.username !== user?.username
-  );
-
-  /* ── Send handler ── */
-  const handleSend = async () => {
-    const content = messageText.trim();
-    if (!content || !activeConvId || sending) return;
-    setMessageText("");
-
-    // Optimistic update — append immediately so it feels instant
-    const optimistic = {
-      id:        `opt-${Date.now()}`,
-      senderId:  user?.id,
-      content,
-      messageType: "text",
-      createdAt: new Date().toISOString(),
-      isDeleted: false,
-      __optimistic: true,
-    };
-    setLocalMessages((prev) => [...prev, optimistic]);
-
-    try {
-      const { data } = await sendMessage({
-        variables: {
-          input: {
-            conversationId: activeConvId,
-            content,
-            messageType: "text",
-          },
-        },
-      });
-      // Replace optimistic message with real one from server
-      if (data?.sendMessage) {
-        setLocalMessages((prev) =>
-          prev.map((m) =>
-            m.id === optimistic.id ? data.sendMessage : m
-          )
-        );
-        refetchConvs();
-      }
-    } catch {
-      // Remove optimistic on failure
-      setLocalMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-    }
-  };
+  const handleSend = useCallback(() => {
+    const content = text.trim();
+    if (!content || sending) return;
+    setText("");
+    sendMessage({
+      variables: {
+        input: { conversationId: conv.id, content, messageType: "text" },
+      },
+    });
+    inputRef.current?.focus();
+  }, [text, sending, conv.id, sendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -199,396 +362,414 @@ export default function MessagesPage() {
     }
   };
 
-  /* ── Render ── */
+  const otherName = getConvName(conv, myUsername);
+
+  return (
+    <div style={ms.chatPanel}>
+      {/* Header */}
+      <div style={ms.chatHeader}>
+        <Avatar username={otherName} size={36} />
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--t1)" }}>{otherName}</div>
+          <div style={{ fontSize: 11, color: "var(--t3)" }}>
+            {conv.conversationType === "dm" ? "Direct message" : "Group chat"}
+          </div>
+        </div>
+        <button style={{ ...ms.iconBtn, marginLeft: "auto" }}>
+          <IconDots size={18} color="var(--t2)" />
+        </button>
+      </div>
+
+      {/* Messages */}
+      <div style={ms.messageArea}>
+        {loading && (
+          <div style={{ textAlign: "center", padding: 32 }}>
+            <IconLoader2 size={20} color="var(--t3)" style={{ animation: "spin 1s linear infinite" }} />
+          </div>
+        )}
+
+        {!loading && allMessages.length === 0 && (
+          <div style={{ textAlign: "center", padding: 40, color: "var(--t3)", fontSize: 13 }}>
+            No messages yet. Say hi! 👋
+          </div>
+        )}
+
+        {allMessages.map((msg) => (
+          <Bubble key={msg.id} msg={msg} isMine={msg.senderId === myUserId} />
+        ))}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input */}
+      <div style={ms.inputArea}>
+        <input
+          ref={inputRef}
+          placeholder="Write a message…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          style={ms.msgInput}
+        />
+        <button
+          className="btn-primary"
+          onClick={handleSend}
+          disabled={!text.trim() || sending}
+          style={{ borderRadius: "50%", width: 40, height: 40, padding: 0, justifyContent: "center", flexShrink: 0 }}
+        >
+          {sending
+            ? <IconLoader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
+            : <IconSend size={16} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Main Page ──────────────────────────────────────────────────────────── */
+export default function MessagesPage() {
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+  const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
+  const [showNewModal, setShowNewModal] = useState(false);
+  const [convSearch, setConvSearch] = useState("");
+
+  const { data, loading: convsLoading, refetch } = useQuery(CONVERSATIONS_QUERY, {
+    skip: !user,
+    fetchPolicy: "network-only",
+    onError: () => {},
+  });
+
+  if (!isLoading && !user) { router.push("/login"); return null; }
+
+  const allConvs: Conversation[] = data?.conversations ?? [];
+  const convs = convSearch.trim()
+    ? allConvs.filter((c) =>
+        getConvName(c, user?.username).toLowerCase().includes(convSearch.toLowerCase())
+      )
+    : allConvs;
+
+  const handleConvCreated = (convId: string) => {
+    setShowNewModal(false);
+    refetch().then(({ data }) => {
+      const created = data?.conversations?.find((c: Conversation) => c.id === convId);
+      if (created) setSelectedConv(created);
+    });
+  };
+
   return (
     <>
       <Navbar />
-      <div style={s.page}>
+      <div style={{ marginTop: "var(--nav-h)", background: "var(--bg)", height: "calc(100vh - var(--nav-h))", display: "flex", overflow: "hidden" }}>
 
-        {/* ── LEFT: conversation sidebar ── */}
-        <div style={s.sidebar} className="card">
-
+        {/* ── Left: Conversations sidebar ── */}
+        <div style={ms.sidebar}>
           {/* Sidebar header */}
-          <div style={s.sidebarHead}>
-            <h2 style={s.sidebarTitle}>Messages</h2>
-            <button style={s.newBtn} title="New conversation">
-              <IconPlus size={16} color="var(--purple)" />
+          <div style={ms.sideHead}>
+            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--t1)" }}>Messages</span>
+            <button
+              className="btn-primary"
+              onClick={() => setShowNewModal(true)}
+              style={{ borderRadius: "50%", width: 34, height: 34, padding: 0, justifyContent: "center" }}
+              title="New conversation"
+            >
+              <IconPlus size={16} />
             </button>
           </div>
 
-          {/* Search */}
-          <div style={s.sidebarSearch}>
+          {/* Search conversations */}
+          <div style={ms.sideSearch}>
             <IconSearch size={13} color="var(--t3)" />
             <input
               placeholder="Search conversations…"
               value={convSearch}
               onChange={(e) => setConvSearch(e.target.value)}
-              style={s.sidebarSearchInput}
+              style={ms.searchInput}
             />
           </div>
 
           {/* List */}
-          <div style={s.convList}>
-            {convLoading && (
-              <div style={s.centerPad}>
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {convsLoading && (
+              <div style={{ textAlign: "center", padding: 32 }}>
                 <IconLoader2 size={20} color="var(--t3)" style={{ animation: "spin 1s linear infinite" }} />
               </div>
             )}
 
-            {!convLoading && filtered.length === 0 && (
-              <div style={s.emptyConv}>No conversations yet</div>
+            {!convsLoading && convs.length === 0 && (
+              <div style={{ textAlign: "center", padding: 32, color: "var(--t3)", fontSize: 13 }}>
+                {convSearch ? "No results" : "No conversations yet"}
+              </div>
             )}
 
-            {filtered.map((conv: any) => {
-              const other = conv.participants?.find(
-                (p: any) => p.username !== user?.username
-              );
-              const name     = other?.username ?? "Unknown";
-              const color    = avaColor(name);
-              const initials = name.slice(0, 2).toUpperCase();
-              const active   = conv.id === activeConvId;
-              const unread   = conv.unreadCount > 0;
-
+            {convs.map((conv) => {
+              const name  = getConvName(conv, user?.username);
+              const active = selectedConv?.id === conv.id;
               return (
                 <div
                   key={conv.id}
-                  onClick={() => setActiveConvId(conv.id)}
+                  onClick={() => setSelectedConv(conv)}
                   style={{
-                    ...s.convItem,
+                    ...ms.convRow,
                     background: active ? "var(--purple-light)" : "transparent",
+                    borderLeft: active ? "3px solid var(--purple)" : "3px solid transparent",
                   }}
                 >
-                  {/* Avatar */}
-                  <div
-                    className="ava"
-                    style={{
-                      width: 42, height: 42,
-                      background: color + "20",
-                      color,
-                      fontSize: 14, fontWeight: 700,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {initials}
-                  </div>
-
-                  {/* Info */}
-                  <div style={s.convInfo}>
-                    <div style={s.convRow}>
-                      <span style={{ ...s.convName, color: active ? "var(--purple)" : "var(--t1)" }}>
+                  <Avatar username={name} size={42} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                      <span style={{ fontSize: 13, fontWeight: conv.unreadCount > 0 ? 700 : 600, color: active ? "var(--purple)" : "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {name}
                       </span>
-                      {conv.participants?.[0]?.createdAt && (
-                        <span style={s.convTime}>{fmt(conv.participants[0].createdAt)}</span>
+                      {conv.lastMessagePreview && (
+                        <span style={{ fontSize: 10, color: "var(--t3)", flexShrink: 0, marginLeft: 4 }}>
+                          {/* last message timestamp not in API, omit */}
+                        </span>
                       )}
                     </div>
-                    <div style={s.convRow}>
-                      <span style={{ ...s.convPreview, fontWeight: unread ? 700 : 400, color: unread ? "var(--t1)" : "var(--t3)" }}>
-                        {conv.lastMessagePreview ?? "No messages yet"}
-                      </span>
-                      {unread && (
-                        <span style={s.unreadBadge}>{conv.unreadCount}</span>
-                      )}
+                    <div style={{ fontSize: 12, color: conv.unreadCount > 0 ? "var(--t1)" : "var(--t3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: conv.unreadCount > 0 ? 600 : 400 }}>
+                      {conv.lastMessagePreview ?? "No messages yet"}
                     </div>
                   </div>
+                  {conv.unreadCount > 0 && (
+                    <div style={ms.unreadBadge}>{conv.unreadCount > 99 ? "99+" : conv.unreadCount}</div>
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
 
-        {/* ── RIGHT: chat area ── */}
-        {activeConvId ? (
-          <div style={s.chatWrap} className="card">
-
-            {/* Chat header */}
-            <div style={s.chatHead}>
-              <div
-                className="ava"
-                style={{
-                  width: 38, height: 38,
-                  background: avaColor(otherParticipant?.username ?? "") + "20",
-                  color: avaColor(otherParticipant?.username ?? ""),
-                  fontSize: 13, fontWeight: 700,
-                }}
-              >
-                {otherParticipant?.username?.slice(0, 2).toUpperCase() ?? "?"}
-              </div>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--t1)" }}>
-                  {otherParticipant?.username ?? "Unknown"}
-                </div>
-                <div style={{ fontSize: 12, color: "var(--t3)" }}>
-                  {activeConv?.conversationType === "dm" ? "Direct Message" : "Group"}
-                </div>
-              </div>
-            </div>
-
-            {/* Messages */}
-            <div style={s.msgList}>
-              {msgLoading && (
-                <div style={s.centerPad}>
-                  <IconLoader2 size={20} color="var(--t3)" style={{ animation: "spin 1s linear infinite" }} />
-                </div>
-              )}
-
-              {!msgLoading && localMessages.length === 0 && (
-                <div style={s.emptyChat}>
-                  <IconMessageCircle size={32} color="var(--border2)" />
-                  <p style={{ marginTop: 10, fontSize: 14, color: "var(--t3)" }}>
-                    No messages yet. Say hello!
-                  </p>
-                </div>
-              )}
-
-              {localMessages.map((msg: any, i: number) => {
-                const isMine = msg.senderId === user?.id;
-                const showDate =
-                  i === 0 ||
-                  new Date(localMessages[i - 1].createdAt).toDateString() !==
-                    new Date(msg.createdAt).toDateString();
-
-                return (
-                  <div key={msg.id}>
-                    {showDate && (
-                      <div style={s.dateDivider}>
-                        <span style={s.dateDividerText}>
-                          {new Date(msg.createdAt).toLocaleDateString([], {
-                            weekday: "long", month: "short", day: "numeric",
-                          })}
-                        </span>
-                      </div>
-                    )}
-
-                    <div style={{ display: "flex", justifyContent: isMine ? "flex-end" : "flex-start", marginBottom: 6 }}>
-                      <div style={{ maxWidth: "68%" }}>
-                        <div
-                          style={{
-                            ...s.bubble,
-                            background:   isMine ? "var(--purple)" : "var(--bg)",
-                            color:        isMine ? "#fff"           : "var(--t1)",
-                            borderRadius: isMine
-                              ? "18px 18px 4px 18px"
-                              : "18px 18px 18px 4px",
-                            opacity: msg.__optimistic ? 0.7 : 1,
-                          }}
-                        >
-                          {msg.isDeleted ? (
-                            <span style={{ fontStyle: "italic", opacity: 0.6 }}>
-                              Message deleted
-                            </span>
-                          ) : (
-                            msg.content
-                          )}
-                        </div>
-
-                        <div style={{ ...s.msgMeta, textAlign: isMine ? "right" : "left" }}>
-                          {fmt(msg.createdAt)}
-                          {isMine && (
-                            <span style={{ marginLeft: 4 }}>
-                              {msg.__optimistic
-                                ? <IconCheck size={11} color="var(--t3)" />
-                                : <IconChecks size={11} color="var(--purple)" />
-                              }
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              <div ref={bottomRef} />
-            </div>
-
-            {/* Input */}
-            <div style={s.inputBar}>
-              <input
-                ref={inputRef}
-                value={messageText}
-                onChange={(e) => setMessageText(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={`Message ${otherParticipant?.username ?? ""}...`}
-                style={s.msgInput}
-              />
-              <button
-                onClick={handleSend}
-                disabled={!messageText.trim() || sending}
-                style={{
-                  ...s.sendBtn,
-                  background: messageText.trim() ? "var(--purple)" : "var(--border2)",
-                }}
-              >
-                {sending
-                  ? <IconLoader2 size={16} color="#fff" style={{ animation: "spin 1s linear infinite" }} />
-                  : <IconSend size={16} color="#fff" />
-                }
+        {/* ── Right: Chat panel or empty state ── */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {selectedConv && user ? (
+            <ChatPanel
+              key={selectedConv.id}     // remount when conversation changes
+              conv={selectedConv}
+              myUserId={user.id}
+              myUsername={user.username}
+            />
+          ) : (
+            <div style={ms.emptyState}>
+              <div style={ms.emptyIcon}><IconMessage size={36} color="var(--purple)" /></div>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--t1)", marginBottom: 8 }}>Your Messages</h2>
+              <p style={{ fontSize: 14, color: "var(--t3)", marginBottom: 20, textAlign: "center", maxWidth: 280 }}>
+                Select a conversation or start a new one to begin messaging.
+              </p>
+              <button className="btn-primary" onClick={() => setShowNewModal(true)} style={{ borderRadius: 8 }}>
+                <IconPlus size={16} /> New Message
               </button>
             </div>
-          </div>
-        ) : (
-          /* ── Empty state ── */
-          <div style={{ ...s.chatWrap, ...s.emptyState }} className="card">
-            <IconMessageCircle size={48} color="var(--border2)" />
-            <h3 style={{ fontSize: 16, fontWeight: 700, color: "var(--t2)", marginTop: 12 }}>
-              Select a conversation
-            </h3>
-            <p style={{ fontSize: 13, color: "var(--t3)", marginTop: 4, textAlign: "center" }}>
-              Choose a conversation from the left, or start a new one.
-            </p>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
+      {/* New conversation modal */}
+      {showNewModal && (
+        <NewConvModal
+          onClose={() => setShowNewModal(false)}
+          onCreated={handleConvCreated}
+        />
+      )}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 }
 
-/* ── Styles ── */
-const s: Record<string, React.CSSProperties> = {
-  page: {
-    marginTop: "var(--nav-h)",
-    height: "calc(100vh - var(--nav-h))",
-    display: "grid",
-    gridTemplateColumns: "300px 1fr",
-    gap: 0,
-    background: "var(--bg)",
-    padding: 16,
-    gap: 12,
-    boxSizing: "border-box",
-  } as React.CSSProperties,
-
-  /* Sidebar */
+/* ─── Styles ─────────────────────────────────────────────────────────────── */
+const ms: Record<string, React.CSSProperties> = {
   sidebar: {
+    width: 320,
+    borderRight: "1px solid var(--border)",
+    background: "var(--surface)",
     display: "flex",
     flexDirection: "column",
-    overflow: "hidden",
-    height: "100%",
-  } as React.CSSProperties,
-
-  sidebarHead: {
+    flexShrink: 0,
+  },
+  sideHead: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "14px 16px 10px",
+    padding: "16px 16px 12px",
     borderBottom: "1px solid var(--border)",
   },
-  sidebarTitle: { fontSize: 16, fontWeight: 800, color: "var(--t1)" },
-  newBtn: {
-    width: 30, height: 30, borderRadius: 8,
-    background: "var(--purple-light)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    border: "none", cursor: "pointer",
-  },
-
-  sidebarSearch: {
-    display: "flex", alignItems: "center", gap: 8,
+  sideSearch: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
     margin: "10px 12px",
-    padding: "8px 12px",
     background: "var(--bg)",
     border: "1px solid var(--border)",
     borderRadius: 8,
+    padding: "8px 12px",
   },
-  sidebarSearchInput: {
-    border: "none", background: "transparent",
-    outline: "none", fontSize: 13,
-    color: "var(--t1)", fontFamily: "inherit", flex: 1,
+  searchInput: {
+    border: "none",
+    background: "transparent",
+    outline: "none",
+    fontSize: 13,
+    color: "var(--t1)",
+    flex: 1,
+    fontFamily: "inherit",
   },
-
-  convList: { flex: 1, overflowY: "auto" as const, padding: "4px 0" },
-
-  convItem: {
-    display: "flex", alignItems: "center", gap: 10,
-    padding: "10px 14px", cursor: "pointer",
+  convRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 11,
+    padding: "11px 14px",
+    cursor: "pointer",
     transition: "background 0.12s",
-    borderRadius: 8, margin: "1px 6px",
   },
-  convInfo: { flex: 1, minWidth: 0 },
-  convRow: { display: "flex", justifyContent: "space-between", alignItems: "center" },
-  convName: { fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const },
-  convTime: { fontSize: 11, color: "var(--t3)", flexShrink: 0 },
-  convPreview: { fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, flex: 1 },
   unreadBadge: {
-    minWidth: 18, height: 18, borderRadius: 9,
-    background: "var(--purple)", color: "#fff",
-    fontSize: 10, fontWeight: 700,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    padding: "0 5px", flexShrink: 0,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    background: "var(--purple)",
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0 5px",
+    flexShrink: 0,
   },
 
-  /* Chat area */
-  chatWrap: {
-    display: "flex", flexDirection: "column" as const,
-    height: "100%", overflow: "hidden",
+  /* Chat */
+  chatPanel: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    background: "var(--bg)",
   },
-
-  chatHead: {
-    display: "flex", alignItems: "center", gap: 10,
-    padding: "12px 16px",
+  chatHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: "12px 20px",
+    background: "var(--surface)",
     borderBottom: "1px solid var(--border)",
     flexShrink: 0,
   },
-
-  msgList: {
-    flex: 1, overflowY: "auto" as const,
+  messageArea: {
+    flex: 1,
+    overflowY: "auto",
     padding: "16px 20px",
-    display: "flex", flexDirection: "column" as const,
+    display: "flex",
+    flexDirection: "column",
   },
-
-  bubble: {
-    padding: "10px 14px",
-    fontSize: 14, lineHeight: 1.5,
-    wordBreak: "break-word" as const,
-  },
-
-  msgMeta: {
-    fontSize: 11, color: "var(--t3)",
-    marginTop: 3, display: "flex", alignItems: "center",
-  },
-
-  dateDivider: {
-    display: "flex", alignItems: "center",
-    justifyContent: "center", margin: "12px 0",
-  },
-  dateDividerText: {
-    fontSize: 11, color: "var(--t3)", fontWeight: 600,
-    background: "var(--bg)", padding: "3px 12px",
-    borderRadius: 20, border: "1px solid var(--border)",
-  },
-
-  inputBar: {
-    display: "flex", alignItems: "center", gap: 10,
+  inputArea: {
+    display: "flex",
+    gap: 10,
     padding: "12px 16px",
+    background: "var(--surface)",
     borderTop: "1px solid var(--border)",
+    alignItems: "center",
     flexShrink: 0,
   },
   msgInput: {
-    flex: 1, border: "1.5px solid var(--border2)",
-    borderRadius: 24, padding: "10px 16px",
-    fontSize: 14, color: "var(--t1)",
-    fontFamily: "inherit", outline: "none",
+    flex: 1,
     background: "var(--bg)",
-    transition: "border 0.15s",
+    border: "1.5px solid var(--border2)",
+    borderRadius: 24,
+    padding: "10px 18px",
+    fontSize: 14,
+    color: "var(--t1)",
+    outline: "none",
+    fontFamily: "inherit",
   },
-  sendBtn: {
-    width: 40, height: 40, borderRadius: "50%",
-    border: "none", cursor: "pointer",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    flexShrink: 0, transition: "background 0.15s",
+  iconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: "50%",
+    background: "transparent",
+    border: "none",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
   },
 
-  /* Shared empty/loading states */
-  centerPad: { display: "flex", justifyContent: "center", padding: 32 },
-  emptyConv: { padding: 24, textAlign: "center" as const, fontSize: 13, color: "var(--t3)" },
-  emptyChat: {
-    flex: 1, display: "flex",
-    flexDirection: "column" as const,
-    alignItems: "center", justifyContent: "center",
-  },
+  /* Empty state */
   emptyState: {
-    alignItems: "center", justifyContent: "center",
-    flexDirection: "column" as const,
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  emptyIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: "50%",
+    background: "var(--purple-light)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+
+  /* Modal */
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.4)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 200,
+  },
+  modal: {
+    background: "var(--surface)",
+    borderRadius: 14,
+    padding: 20,
+    width: 380,
+    maxWidth: "90vw",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  modalHead: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  searchRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    background: "var(--bg)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    padding: "8px 12px",
+  },
+  selectedPill: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: "var(--purple-light)",
+    border: "1px solid rgba(107,78,255,0.25)",
+    borderRadius: 20,
+    padding: "4px 10px",
+    width: "fit-content",
+    color: "var(--purple)",
+  },
+  userList: {
+    maxHeight: 240,
+    overflowY: "auto",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+  },
+  userRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    cursor: "pointer",
+    transition: "background 0.1s",
+    borderBottom: "1px solid var(--border)",
   },
 };
